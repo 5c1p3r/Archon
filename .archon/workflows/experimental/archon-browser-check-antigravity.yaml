@@ -1,0 +1,96 @@
+name: archon-browser-check-antigravity
+description: |
+  PROTOTYPE (2026-08-19). Shells out to Google Antigravity's `agy` CLI in
+  headless/print mode to drive a real browser against a running page and
+  report PASS/FAIL with evidence — a free (AI-Pro-subscription-metered, not
+  Claude-token-metered) browser-verification check, distinct from Archon's
+  own AI providers. Built to explore wiring into the PIV validate stage for
+  @archon/web / docs-web changes; not yet plugged into any other workflow.
+
+  Use when: you want to manually try the check node, or iterate on the
+  prompt/flags before deciding whether to promote this further.
+  Triggers: "run the antigravity browser check", "browser-check antigravity".
+  NOT for: production validation gates (unverified end-to-end — see below),
+           anything requiring Archon-governed session/approval/audit
+           semantics (this is a plain bash escape hatch, not a real provider).
+
+  Usage: archon workflow run archon-browser-check-antigravity "<url> <what to check>"
+  Example: archon workflow run archon-browser-check-antigravity "http://localhost:5173 the login form renders and submitting with empty fields shows a validation error"
+  If no check description is given, defaults to a generic console-error /
+  primary-UI-renders check.
+
+  UNVERIFIED — read before relying on this:
+  - `agy` is not installed on the machine this was written on (`which agy`
+    exits 127), so this has never actually been run. The `-p`/`--print` and
+    `--output-format json` flags are documented at antigravity.google/docs/cli,
+    but the exact JSON shape and whether headless auth rides the Antigravity
+    subscription quota (vs. falling back to metered GEMINI_API_KEY billing)
+    are both unconfirmed.
+  - No dev-server bootstrap here (unlike archon-validate-pr.yaml's port
+    allocation) — point it at an already-running URL. Wire that in later if
+    this proves useful.
+  - Toolshed's normal 90-minute-eval-before-build gate was explicitly
+    skipped for this prototype per user instruction 2026-08-19 (see
+    ROADMAP.md's Parked section note and PROJECTS.md's Archon entry).
+
+nodes:
+  - id: resolve-target
+    bash: |
+      set -euo pipefail
+
+      TARGET_URL=$(echo "$ARGUMENTS" | awk '{print $1}')
+      CHECK_DESC=$(echo "$ARGUMENTS" | cut -s -d' ' -f2-)
+
+      if [ -z "$TARGET_URL" ]; then
+        echo "ERROR: no URL provided."
+        echo 'Usage: archon workflow run archon-browser-check-antigravity "<url> <what to check>"'
+        exit 1
+      fi
+
+      if [ -z "$CHECK_DESC" ]; then
+        CHECK_DESC="the page loads with no console errors and the primary UI renders correctly"
+      fi
+
+      mkdir -p "$ARTIFACTS_DIR"
+      printf '%s' "$TARGET_URL" > "$ARTIFACTS_DIR/.target-url"
+      printf '%s' "$CHECK_DESC" > "$ARTIFACTS_DIR/.check-desc"
+
+      echo "URL:   $TARGET_URL"
+      echo "CHECK: $CHECK_DESC"
+    timeout: 10000
+
+  - id: browser-check
+    bash: |
+      set -euo pipefail
+
+      if ! command -v agy >/dev/null 2>&1; then
+        echo "ERROR: 'agy' (Antigravity CLI) not found on PATH."
+        echo "Install: https://antigravity.google/docs/cli/overview"
+        echo "This node has never been run end-to-end — verify 'agy -p --help' matches the flags used below before trusting the result."
+        exit 1
+      fi
+
+      TARGET_URL=$(cat "$ARTIFACTS_DIR/.target-url")
+      CHECK_DESC=$(cat "$ARTIFACTS_DIR/.check-desc")
+
+      PROMPT_FILE="$ARTIFACTS_DIR/agy-prompt.txt"
+      cat > "$PROMPT_FILE" <<PROMPT_EOF
+      Open a browser and navigate to: $TARGET_URL
+
+      Verify: $CHECK_DESC
+
+      Report back with exactly this structure:
+      - verdict: PASS or FAIL
+      - evidence: what you observed (console errors, missing elements, visual issues)
+      - screenshot: path to any screenshot you captured
+
+      This is a read-only verification pass — do not modify any files.
+      PROMPT_EOF
+
+      agy -p "$(cat "$PROMPT_FILE")" --output-format json \
+        > "$ARTIFACTS_DIR/agy-browser-check.json" \
+        2> "$ARTIFACTS_DIR/agy-browser-check.stderr.log"
+
+      cat "$ARTIFACTS_DIR/agy-browser-check.json"
+    timeout: 300000
+    depends_on: [resolve-target]

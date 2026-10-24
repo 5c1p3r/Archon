@@ -37,6 +37,10 @@ Archon turns your process into a workflow you own. The workflow fixes the steps,
 - **Your agents, your subscriptions.** Archon is not another coding agent. It runs Claude Code, Codex and Pi through their own CLIs and SDKs, with the accounts and project guidance you already have.
 - **Self-hosted.** One install on your machine or server. SQLite by default, PostgreSQL if you want it.
 
+## The Shape of a Workflow
+
+A good Archon workflow is not an assistant. It is a small product with one job: it watches something, makes a decision, and triggers an action, or it turns a messy process into one input and one useful output. Planning a feature, reviewing a PR, and watching a set of pages until something changes all have this shape. The workflow is the unit you keep, share, and reuse.
+
 ## What it looks like
 
 A workflow is a graph of nodes. Agents judge, code computes, and you decide where it matters:

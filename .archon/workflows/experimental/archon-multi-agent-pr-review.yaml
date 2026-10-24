@@ -1,0 +1,144 @@
+name: archon-multi-agent-pr-review
+description: |
+  EXPERIMENTAL. Reviews one PR with four independent agents (Claude, OpenCode,
+  Hermes, Grok), then has Claude merge their findings into one ranked report
+  that says which reviewers agreed. Read-only: never comments on or edits the PR.
+
+  Claude and OpenCode run as governed provider nodes. Hermes and Grok have no
+  Archon provider, so they run as plain `bash:` nodes over their headless CLIs
+  (Grok in `--permission-mode plan`, Hermes with all toolsets off) — no Archon
+  session, approval or audit semantics for those two. The diff is truncated to
+  keep the Hermes command line under the Windows argument limit; the report
+  says when that happened.
+
+  OpenCode needs an `opencode` 1.x binary first on PATH (the SDK cannot start
+  the v2 CLI's server): launch Archon with
+  PATH="$HOME/.archon/opencode-v1/node_modules/.bin:$PATH".
+
+  A failing Hermes or Grok node is reported to the merge step as "REVIEWER
+  FAILED" and dropped. A failing Claude or OpenCode node is NOT survivable:
+  the engine refuses to splice a failed provider node's output, so the merge
+  fails with it.
+
+  Usage: archon workflow run archon-multi-agent-pr-review --no-worktree "<pr-number>"
+
+nodes:
+  - id: fetch
+    bash: |
+      set -euo pipefail
+      PR=$(echo "$ARGUMENTS" | awk '{print $1}')
+      case "$PR" in ''|*[!0-9]*) echo "ERROR: expected a PR number, got '$ARGUMENTS'" >&2; exit 1;; esac
+      mkdir -p "$ARTIFACTS_DIR"
+      gh pr diff "$PR" > "$ARTIFACTS_DIR/full.diff"
+      TOTAL=$(wc -c < "$ARTIFACTS_DIR/full.diff")
+      {
+        gh pr view "$PR" --json title,body,baseRefName,headRefName,additions,deletions,changedFiles \
+          --template '# PR {{.title}}
+      base: {{.baseRefName}}  head: {{.headRefName}}  (+{{.additions}} -{{.deletions}}, {{.changedFiles}} files)
+
+      {{.body}}
+      '
+        echo
+        echo '## Diff'
+        head -c 20000 "$ARTIFACTS_DIR/full.diff"
+        if [ "$TOTAL" -gt 20000 ]; then
+          echo
+          echo "[DIFF TRUNCATED: first 20000 of $TOTAL bytes]"
+        fi
+      } > "$ARTIFACTS_DIR/packet.md"
+      cat "$ARTIFACTS_DIR/packet.md"
+    timeout: 60000
+
+  - id: claude
+    depends_on: [fetch]
+    provider: claude
+    model: claude-sonnet-5
+    allowed_tools: []
+    idle_timeout: 180000
+    prompt: |
+      Review this pull request for correctness bugs, regressions, missing tests
+      and risky design. Skip style nitpicks. For each finding give: severity
+      (high/medium/low), file and line if you can tell, the failure scenario,
+      and a one-line fix. If you see nothing worth reporting, say so.
+
+      $fetch.output
+
+  - id: opencode
+    depends_on: [fetch]
+    provider: opencode
+    model: opencode/big-pickle
+    idle_timeout: 180000
+    prompt: |
+      Review this pull request for correctness bugs, regressions, missing tests
+      and risky design. Skip style nitpicks. For each finding give: severity
+      (high/medium/low), file and line if you can tell, the failure scenario,
+      and a one-line fix. If you see nothing worth reporting, say so. Do not
+      run commands or edit files.
+
+      $fetch.output
+
+  - id: hermes
+    depends_on: [fetch]
+    bash: |
+      set -uo pipefail
+      {
+        echo "Review this pull request for correctness bugs, regressions, missing tests and risky design. Skip style nitpicks. For each finding give: severity (high/medium/low), file and line if you can tell, the failure scenario, and a one-line fix. If nothing is worth reporting, say so."
+        echo
+        cat "$ARTIFACTS_DIR/packet.md"
+      } > "$ARTIFACTS_DIR/hermes-prompt.txt"
+      # Exit 0 on failure so the merge node still runs; the marker tells it this reviewer produced nothing.
+      timeout 600 hermes -z "$(cat "$ARTIFACTS_DIR/hermes-prompt.txt")" -t "" 2> "$ARTIFACTS_DIR/hermes.stderr.log" \
+        || echo "REVIEWER FAILED: hermes exited non-zero (see hermes.stderr.log)"
+    timeout: 700000
+
+  - id: grok
+    depends_on: [fetch]
+    bash: |
+      set -uo pipefail
+      {
+        echo "Review this pull request for correctness bugs, regressions, missing tests and risky design. Skip style nitpicks. For each finding give: severity (high/medium/low), file and line if you can tell, the failure scenario, and a one-line fix. If nothing is worth reporting, say so. Judge ONLY the diff given here: do not explore the repository, run commands or edit files."
+        echo
+        cat "$ARTIFACTS_DIR/packet.md"
+      } > "$ARTIFACTS_DIR/grok-prompt.txt"
+      timeout 600 grok --permission-mode plan --prompt-file "$ARTIFACTS_DIR/grok-prompt.txt" 2> "$ARTIFACTS_DIR/grok.stderr.log" \
+        || echo "REVIEWER FAILED: grok exited non-zero (see grok.stderr.log)"
+    timeout: 700000
+
+  - id: merge
+    depends_on: [claude, opencode, hermes, grok]
+    trigger_rule: all_done
+    provider: claude
+    model: claude-opus-5
+    allowed_tools: []
+    idle_timeout: 240000
+    prompt: |
+      Four independent reviewers reviewed the same pull request. Merge their
+      findings into one report.
+
+      Rules:
+      - Deduplicate: one entry per underlying issue, naming every reviewer that
+        raised it (claude / opencode / hermes / grok).
+      - Rank by severity, then by how many reviewers agreed. A finding raised by
+        only one reviewer is kept but marked "single reviewer" — do not drop it,
+        and do not promote it.
+      - Reject findings that contradict the diff or the PR description; list
+        them separately under "Rejected" with the reason.
+      - If a reviewer's section below is empty or an error, say which reviewer
+        produced nothing instead of treating it as "no findings".
+      - If the PR text says the diff was truncated, say the review is partial.
+      - End with a one-line verdict: ready / changes needed / blocked.
+
+      PR packet:
+      $fetch.output
+
+      ## claude
+      $claude.output
+
+      ## opencode
+      $opencode.output
+
+      ## hermes
+      $hermes.output
+
+      ## grok
+      $grok.output

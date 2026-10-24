@@ -1,0 +1,103 @@
+name: archon-route-task
+description: |
+  EXPERIMENTAL. One orchestrator, one agent per task. A small Claude node reads
+  the task and picks a route as a typed enum; `when:` gates then run exactly
+  that route and skip the rest. Nothing is fanned out, so a task costs one
+  agent's tokens plus one short routing call.
+
+  Routes (a starting hypothesis from measured behaviour on this machine, not a
+  benchmark — check each run's `route` output and tune the router prompt):
+    claude-opus     hard design, planning, security, ambiguous high-stakes work
+    claude-sonnet   default for code changes and anything needing precision
+    opencode-free   free models with repo tools: low-stakes reading/exploration
+    hermes-free     free model, no tools: short rewrite/summarise/draft text
+    grok-web        needs current or web information (Grok has web search)
+
+  Claude and OpenCode run as governed provider nodes. Hermes and Grok run as
+  `bash:` nodes over their headless CLIs, with no Archon session, approval or
+  audit handling. OpenCode needs an `opencode` 1.x binary first on PATH:
+    PATH="$HOME/.archon/opencode-v1/node_modules/.bin:$PATH"
+
+  The router only sees the task text. If it picks a route that fails, the run
+  fails loudly; there is no silent fallback to another agent.
+
+  Usage: archon workflow run archon-route-task --no-worktree "<task>"
+
+nodes:
+  - id: route
+    provider: claude
+    model: claude-haiku-4-5
+    allowed_tools: []
+    idle_timeout: 60000
+    output_format:
+      type: object
+      properties:
+        agent:
+          type: string
+          enum: [claude-opus, claude-sonnet, opencode-free, hermes-free, grok-web]
+        reason:
+          type: string
+      required: [agent, reason]
+    prompt: |
+      Pick the cheapest agent that can do this task well. Cost order, cheapest
+      first: hermes-free, opencode-free, grok-web, claude-sonnet, claude-opus.
+
+      - hermes-free: free model, no tools, no repo access. Short self-contained
+        text work: rewrite, summarise, draft, simple Q&A, arithmetic.
+      - opencode-free: free models that can read the repository. Low-stakes
+        exploration or explanation of code where a mistake is cheap.
+      - grok-web: needs current events or information from the web.
+      - claude-sonnet: code changes, debugging, anything where precision
+        matters, or when unsure between a free agent and Claude.
+      - claude-opus: hard architecture, planning, security review, or
+        ambiguous high-stakes work.
+
+      When a free agent would plausibly do but an error would be costly, choose
+      claude-sonnet. Give a one-sentence reason.
+
+      Task:
+      $ARGUMENTS
+
+  - id: claude-opus
+    depends_on: [route]
+    when: "$route.output.agent == 'claude-opus'"
+    provider: claude
+    model: claude-opus-5
+    idle_timeout: 600000
+    prompt: "$ARGUMENTS"
+
+  - id: claude-sonnet
+    depends_on: [route]
+    when: "$route.output.agent == 'claude-sonnet'"
+    provider: claude
+    model: claude-sonnet-5
+    idle_timeout: 600000
+    prompt: "$ARGUMENTS"
+
+  - id: opencode-free
+    depends_on: [route]
+    when: "$route.output.agent == 'opencode-free'"
+    provider: opencode
+    model: opencode/big-pickle
+    idle_timeout: 600000
+    prompt: "$ARGUMENTS"
+
+  - id: hermes-free
+    depends_on: [route]
+    when: "$route.output.agent == 'hermes-free'"
+    bash: |
+      set -uo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      printf '%s' "$ARGUMENTS" > "$ARTIFACTS_DIR/task.txt"
+      timeout 600 hermes -z "$(cat "$ARTIFACTS_DIR/task.txt")" -t "" 2> "$ARTIFACTS_DIR/hermes.stderr.log"
+    timeout: 700000
+
+  - id: grok-web
+    depends_on: [route]
+    when: "$route.output.agent == 'grok-web'"
+    bash: |
+      set -uo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      printf '%s' "$ARGUMENTS" > "$ARTIFACTS_DIR/task.txt"
+      timeout 600 grok --permission-mode plan --prompt-file "$ARTIFACTS_DIR/task.txt" 2> "$ARTIFACTS_DIR/grok.stderr.log"
+    timeout: 700000

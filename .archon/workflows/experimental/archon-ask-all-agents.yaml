@@ -1,0 +1,54 @@
+name: archon-ask-all-agents
+description: |
+  EXPERIMENTAL. Sends one prompt to Claude, OpenCode, Hermes and Grok in
+  parallel and prints each answer side by side.
+
+  Claude and OpenCode run as governed provider nodes. Hermes and Grok have no
+  Archon provider, so they run as plain `bash:` nodes over their headless CLI
+  modes (`hermes -z`, `grok -p`) — no Archon session, approval or audit
+  semantics for those two.
+
+  OpenCode needs an `opencode` 1.x binary first on PATH: @opencode-ai/sdk 1.x
+  waits for a "opencode server listening" line that the v2 CLI no longer
+  prints, so the embedded server times out. An isolated 1.19.3 install lives
+  at ~/.archon/opencode-v1; launch Archon with
+  PATH="$HOME/.archon/opencode-v1/node_modules/.bin:$PATH".
+
+  Usage: archon workflow run archon-ask-all-agents "<question>"
+
+nodes:
+  - id: claude
+    provider: claude
+    model: claude-sonnet-5
+    prompt: "Answer concisely: $ARGUMENTS"
+    allowed_tools: []
+    idle_timeout: 120000
+
+  - id: opencode
+    provider: opencode
+    model: opencode/big-pickle
+    prompt: "Answer concisely: $ARGUMENTS"
+    idle_timeout: 120000
+
+  - id: hermes
+    bash: |
+      set -uo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      hermes -z "Answer concisely: $ARGUMENTS" 2> "$ARTIFACTS_DIR/hermes.stderr.log"
+    timeout: 180000
+
+  - id: grok
+    bash: |
+      set -uo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      grok -p "Answer concisely: $ARGUMENTS" 2> "$ARTIFACTS_DIR/grok.stderr.log"
+    timeout: 180000
+
+  - id: compare
+    depends_on: [claude, opencode, hermes, grok]
+    trigger_rule: all_done
+    bash: |
+      printf '=== claude ===\n%s\n\n' "$claude.output"
+      printf '=== opencode ===\n%s\n\n' "$opencode.output"
+      printf '=== hermes ===\n%s\n\n' "$hermes.output"
+      printf '=== grok ===\n%s\n' "$grok.output"
