@@ -641,6 +641,7 @@ nodes:
 - If both are set, `denied_tools` is applied after `allowed_tools`
 - `undefined` (field absent) and `[]` have different semantics: absent means use default tool set, `[]` means no tools
 - Supported on all providers except Codex: Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+- OpenCode enforces `denied_tools` and `allowed_tools: []` only. A non-empty `allowed_tools` fails the node: OpenCode can re-enable a tool only with a rule that also overrides the user's own OpenCode permission policy for it (for example its default `*.env` read deny). Use OpenCode's lowercase, case-sensitive tool ids (`bash`, `edit`, `write`); a `denied_tools` name the server has not registered produces a warning
 
 ### Inline sub-agents
 

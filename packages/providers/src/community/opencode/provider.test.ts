@@ -32,6 +32,9 @@ type MockRuntime = {
     instance: {
       dispose: ReturnType<typeof mock>;
     };
+    tool?: {
+      ids: ReturnType<typeof mock>;
+    };
   };
   server: {
     url: string;
@@ -73,6 +76,7 @@ function makeRuntime(overrides?: {
   sessionAbort?: ReturnType<typeof mock>;
   subscribe?: ReturnType<typeof mock>;
   instanceDispose?: ReturnType<typeof mock>;
+  toolIds?: ReturnType<typeof mock>;
   close?: ReturnType<typeof mock>;
 }): MockRuntime {
   const sessionCreate =
@@ -105,6 +109,7 @@ function makeRuntime(overrides?: {
       instance: {
         dispose: instanceDispose,
       },
+      ...(overrides?.toolIds ? { tool: { ids: overrides.toolIds } } : {}),
     },
     server: {
       url: 'http://mock-opencode.local',
@@ -1960,6 +1965,72 @@ describe('OpencodeProvider', () => {
         agent: 'archon-tools-agent',
       }),
     });
+  });
+
+  test('allowed_tools: [] reaches OpenCode as a map that disables every tool', async () => {
+    const cwd = await createTempProjectDir();
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: { allowed_tools: [] },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
+      path: { id: 'session-1' },
+      query: { directory: cwd },
+      body: expect.objectContaining({ tools: { '*': false } }),
+    });
+  });
+
+  test('a non-empty allowed_tools fails the turn before anything is prompted', async () => {
+    const cwd = await createTempProjectDir();
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+
+    const { failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: { allowed_tools: ['read', 'grep'] },
+      })
+    );
+
+    expect(failure?.evidence).toContain('cannot enforce a non-empty allowed_tools');
+    expect(runtime.client.session.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('denied_tools names the server has not registered are reported, and still sent', async () => {
+    const cwd = await createTempProjectDir();
+    const toolIds = mock(async () => ({ data: ['bash', 'read', 'edit', 'write'] }));
+    const runtime = makeRuntime({ toolIds });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: { denied_tools: ['Bash', 'edit', 'mcp_*'] },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(toolIds).toHaveBeenCalledWith({ query: { directory: cwd } });
+    expect(chunks).toContainEqual({
+      type: 'warning',
+      code: 'opencode.unknown_tools',
+      message: expect.stringContaining('registered OpenCode tool: Bash.'),
+    });
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({ tools: { Bash: false, edit: false, 'mcp_*': false } }),
+      })
+    );
   });
 
   test('uses node prompt as task when agent is configured', async () => {

@@ -89,6 +89,9 @@ export interface OpencodeClientLike {
   instance?: {
     dispose(options?: Record<string, unknown>): Promise<unknown>;
   };
+  tool?: {
+    ids(options?: Record<string, unknown>): Promise<{ data?: unknown }>;
+  };
 }
 
 export interface EmbeddedRuntime {

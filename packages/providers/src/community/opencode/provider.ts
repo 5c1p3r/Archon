@@ -23,8 +23,10 @@ import {
   acquireEmbeddedRuntime,
   disposeInstanceForDirectory,
   releaseEmbeddedRuntime,
+  type OpencodeClientLike,
 } from './runtime';
 import { resolveSessionId, streamOpencodeSession } from './session';
+import { unregisteredDeniedTools } from './tool-restrictions';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 
@@ -36,6 +38,44 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.opencode');
   return cachedLog;
+}
+
+/**
+ * Warns when a `denied_tools` name matches no tool the server registered, so a
+ * misspelled or Claude-cased name (`Bash`) is reported instead of denying nothing.
+ * The lookup only enriches the report: if it fails, the restriction is still sent
+ * and the failure is logged.
+ */
+async function* unregisteredDeniedToolsWarning(
+  client: OpencodeClientLike,
+  cwd: string,
+  requestOptions: SendQueryOptions | undefined
+): AsyncGenerator<MessageChunk> {
+  if (!requestOptions?.nodeConfig?.denied_tools?.length || !client.tool) return;
+  let ids: unknown;
+  try {
+    ids = (await client.tool.ids({ query: { directory: cwd } })).data;
+  } catch (error) {
+    getLog().warn({ err: error }, 'opencode.tool_ids_lookup_failed');
+    return;
+  }
+  if (!Array.isArray(ids)) {
+    getLog().warn('opencode.tool_ids_lookup_failed');
+    return;
+  }
+  const unregistered = unregisteredDeniedTools(
+    requestOptions.nodeConfig,
+    ids.filter((id): id is string => typeof id === 'string')
+  );
+  if (unregistered.length === 0) return;
+  yield {
+    type: 'warning',
+    code: 'opencode.unknown_tools',
+    message:
+      `denied_tools names no registered OpenCode tool: ${unregistered.join(', ')}. ` +
+      'OpenCode tool names are case-sensitive (bash, not Bash). MCP tools are not in the ' +
+      'registry, so a denied MCP tool is listed here too.',
+  };
 }
 
 export class OpencodeProvider implements IAgentProvider {
@@ -124,6 +164,8 @@ export class OpencodeProvider implements IAgentProvider {
     const client = embedded.client;
 
     try {
+      yield* unregisteredDeniedToolsWarning(client, sessionCwd, requestOptions);
+
       // When agents are defined, use a per-node session directory so each node
       // gets its own OpenCode InstanceState — preventing stale agent cache from
       // previous nodes in the same workflow run.

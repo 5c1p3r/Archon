@@ -30,7 +30,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   skills: false, // top-level nodeConfig.skills has no OpenCode request translation yet
   plugins: false,
   agents: true,
-  toolRestrictions: true,
+  toolRestrictions: true, // tool-restrictions.ts; a non-empty allowed_tools fails the node
   structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output
   requiresAllPropertiesRequired: false, // OpenCode does not enforce the required-coverage rule
   // One embedded server is shared by every node and starts with no request env, so a codebase's

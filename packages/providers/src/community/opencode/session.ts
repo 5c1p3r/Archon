@@ -19,6 +19,7 @@ import {
 import { errorMessage, pendingPermissionError } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import { sumAssistantUsage } from './tokens';
+import { mergeToolsMaps, nodeToolsMap } from './tool-restrictions';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -166,11 +167,16 @@ export function createSessionPromptBody(
     requestOptions?.nodeConfig?.systemPrompt ??
     requestOptions?.appendSystemPrompt;
   const system = Array.isArray(selectedSystem) ? selectedSystem.join('\n') : selectedSystem;
+  const structuredOutput = requestOptions?.outputFormat?.type === 'json_schema';
+  const tools = mergeToolsMaps(
+    adaptedAgentConfig?.tools,
+    nodeToolsMap(requestOptions?.nodeConfig, structuredOutput)
+  );
   const promptBody: NonNullable<SessionPromptAsyncData['body']> = {
     parts: [{ type: 'text', text: effectivePrompt }],
     model: adaptedAgentConfig?.model ?? model,
     ...(adaptedAgentConfig?.agent ? { agent: adaptedAgentConfig.agent } : {}),
-    ...(adaptedAgentConfig?.tools ? { tools: adaptedAgentConfig.tools } : {}),
+    ...(tools ? { tools } : {}),
     ...(system ? { system } : {}),
   };
 

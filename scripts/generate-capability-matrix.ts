@@ -104,6 +104,14 @@ const CAVEATS: readonly { provider: string; key: keyof ProviderCapabilities; not
       'Config-file-based agent selection (named agents from `opencode.json`) with per-call ' +
       'model/tools overrides — not inline sub-agent definitions.',
   },
+  {
+    provider: 'opencode',
+    key: 'toolRestrictions',
+    note:
+      '`denied_tools` and `allowed_tools: []` are enforced; a non-empty `allowed_tools` fails ' +
+      "the node, because re-enabling a tool in OpenCode also overrides the user's OpenCode " +
+      'permission policy for it. Tool names are OpenCode ids (lowercase, case-sensitive).',
+  },
 ];
 
 const SUPERSCRIPT_DIGITS = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'] as const;

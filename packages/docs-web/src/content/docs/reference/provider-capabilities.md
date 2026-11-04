@@ -68,7 +68,7 @@ for the background-start admission and observation cutoff rules.
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Plugins (`plugins:`) | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
-| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅² | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
 | Env injection (`env:`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -88,6 +88,7 @@ for the background-start admission and observation cutoff rules.
 ## Caveats
 
 - ¹ `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
+- ² `opencode` — Tool restrictions (`allowed_tools`/`denied_tools`) — `denied_tools` and `allowed_tools: []` are enforced; a non-empty `allowed_tools` fails the node, because re-enabling a tool in OpenCode also overrides the user's OpenCode permission policy for it. Tool names are OpenCode ids (lowercase, case-sensitive).
 
 ## Legend
 
